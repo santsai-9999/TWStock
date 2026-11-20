@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>台股即時五檔</title>
+<style>
+  :root { --up:#e53935; --down:#1e9e4a; --flat:#666; --bg:#f6f7f9; --card:#fff; --line:#e5e7eb; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); font-family: system-ui, "Noto Sans TC", "Microsoft JhengHei", sans-serif; color:#222; }
+  .wrap { max-width: 520px; margin: 24px auto; padding: 0 16px; }
+  form { display:flex; gap:8px; }
+  input { flex:1; font-size:18px; padding:10px 12px; border:1px solid var(--line); border-radius:8px; }
+  button { font-size:16px; padding:10px 18px; border:0; border-radius:8px; background:#2563eb; color:#fff; cursor:pointer; }
+  .quick { margin:10px 0 16px; display:flex; flex-wrap:wrap; gap:6px; }
+  .quick span { padding:4px 10px; background:#e8eefc; color:#2563eb; border-radius:999px; cursor:pointer; font-size:14px; }
+  .card { background:var(--card); border-radius:12px; padding:16px; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+  .head { display:flex; justify-content:space-between; align-items:baseline; }
+  .name { font-size:20px; font-weight:600; }
+  .name small { color:#888; font-weight:400; font-size:14px; margin-left:6px; }
+  .price { font-size:32px; font-weight:700; font-variant-numeric: tabular-nums; }
+  .chg { font-size:15px; margin-left:6px; }
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:4px; font-size:13px; color:#666; margin:10px 0 14px; }
+  .stats b { color:#222; font-weight:500; display:block; font-variant-numeric: tabular-nums; }
+  table { width:100%; border-collapse:collapse; font-variant-numeric: tabular-nums; }
+  th { font-size:13px; color:#888; font-weight:400; padding:6px; border-bottom:1px solid var(--line); }
+  td { padding:7px 6px; font-size:16px; text-align:right; position:relative; }
+  td.vol { color:#444; }
+  td .bar { position:absolute; top:4px; bottom:4px; opacity:.12; z-index:0; }
+  td span { position:relative; z-index:1; }
+  .bidbar { right:0; background:var(--up); }
+  .askbar { left:0; background:var(--down); }
+  .up { color:var(--up); } .down { color:var(--down); } .flat { color:var(--flat); }
+  .foot { margin-top:12px; font-size:13px; color:#888; display:flex; justify-content:space-between; }
+  .err { color:var(--up); }
+  .flash { animation: f .6s; } @keyframes f { from { background:#fff3c4; } to { background:transparent; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <form id="form">
+    <input id="code" placeholder="輸入股票代號，例如 2330" value="2330" autocomplete="off">
+    <button>切換</button>
+  </form>
+  <div class="quick" id="quick"></div>
+
+  <div class="card">
+    <div class="head">
+      <div class="name" id="name">載入中…</div>
+      <div><span class="price" id="last">-</span><span class="chg" id="chg"></span></div>
+    </div>
+    <div class="stats">
+      <div>開盤<b id="open">-</b></div><div>最高<b id="high">-</b></div>
+      <div>最低<b id="low">-</b></div><div>總量<b id="vol">-</b></div>
+    </div>
+    <table>
+      <thead><tr><th>買量</th><th>買價</th><th>賣價</th><th>賣量</th></tr></thead>
+      <tbody id="book"></tbody>
+    </table>
+    <div class="foot"><span id="time"></span><span id="msg"></span></div>
+  </div>
+</div>
+
+<script>
+const REFRESH_MS = 5000;
+const QUICK = ["2330", "2317", "2454", "0050", "2603", "6488"];
+let code = "2330", timer = null, lastJson = "";
+
+const $ = id => document.getElementById(id);
+const px = p => p == null ? "市價" : fmt(p);
+const fmt = (p, d = 2) => p == null ? "-" : Number(p).toFixed(d).replace(/\.?0+$/, "");
+const cls = (p, prev) => p == null || prev == null ? "" : p > prev ? "up" : p < prev ? "down" : "flat";
+
+$("quick").innerHTML = QUICK.map(c => `<span data-c="${c}">${c}</span>`).join("");
+$("quick").onclick = e => { if (e.target.dataset.c) { $("code").value = e.target.dataset.c; switchTo(e.target.dataset.c); } };
+$("form").onsubmit = e => { e.preventDefault(); switchTo($("code").value); };
+
+function switchTo(c) {
+  c = c.trim().toUpperCase();
+  if (!c) return;
+  code = c; lastJson = "";
+  $("name").textContent = "載入中…";
+  $("book").innerHTML = "";
+  clearInterval(timer);
+  load();
+  timer = setInterval(load, REFRESH_MS);
+}
+
+async function load() {
+  const want = code;
+  try {
+    const r = await fetch(`/api/quote/${encodeURIComponent(want)}`);
+    const d = await r.json();
+    if (want !== code) return;                 // 使用者已切換到別檔，丟棄舊回應
+    if (d.error) { $("msg").innerHTML = `<span class="err">${d.error}</span>`; $("name").textContent = want; return; }
+    render(d);
+    $("msg").textContent = "";
+  } catch (e) {
+    $("msg").innerHTML = `<span class="err">讀取失敗，稍後重試</span>`;
+  }
+}
+
+function render(d) {
+  const json = JSON.stringify(d);
+  const changed = lastJson && json !== lastJson;
+  lastJson = json;
+
+  document.title = `${d.code} ${d.name} ${fmt(d.last)}`;
+  $("name").innerHTML = `${d.code} ${d.name}<small>${d.market}</small>`;
+  // 尚未成交（如盤前試撮時 z 為 "-"）時，用最佳買價顯示參考價
+  const last = d.last ?? d.bids[0]?.price ?? null;
+  $("last").textContent = fmt(last);
+  $("last").className = "price " + cls(last, d.prev);
+  if (last != null && d.prev) {
+    const diff = last - d.prev, pct = diff / d.prev * 100;
+    const sign = diff > 0 ? "▲" : diff < 0 ? "▼" : "";
+    $("chg").textContent = `${sign}${fmt(Math.abs(diff))} (${pct.toFixed(2)}%)`;
+    $("chg").className = "chg " + cls(last, d.prev);
+  } else { $("chg").textContent = ""; }
+
+  for (const k of ["open", "high", "low"]) { $(k).textContent = fmt(d[k]); $(k).className = cls(d[k], d.prev); }
+  $("vol").textContent = d.volume == null ? "-" : Number(d.volume).toLocaleString();
+
+  const maxVol = Math.max(1, ...d.bids.map(x => x.vol), ...d.asks.map(x => x.vol));
+  const rows = [];
+  for (let i = 0; i < 5; i++) {
+    const b = d.bids[i], a = d.asks[i];
+    rows.push(`<tr>
+      <td class="vol">${b ? `<div class="bar bidbar" style="width:${b.vol / maxVol * 100}%"></div><span>${b.vol}</span>` : ""}</td>
+      <td class="${b ? cls(b.price, d.prev) : ""}"><span>${b ? px(b.price) : ""}</span></td>
+      <td class="${a ? cls(a.price, d.prev) : ""}"><span>${a ? px(a.price) : ""}</span></td>
+      <td class="vol">${a ? `<div class="bar askbar" style="width:${a.vol / maxVol * 100}%"></div><span>${a.vol}</span>` : ""}</td>
+    </tr>`);
+  }
+  $("book").innerHTML = rows.join("");
+  if (changed) { $("book").classList.remove("flash"); void $("book").offsetWidth; $("book").classList.add("flash"); }
+  $("time").textContent = `資料時間 ${d.time}`;
+}
+
+switchTo(code);
+</script>
+</body>
+</html>
